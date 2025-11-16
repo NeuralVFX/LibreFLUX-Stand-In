@@ -237,47 +237,85 @@ class FluxSingleTransformerBlock(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         joint_attention_kwargs: dict = {},
     ):
+
+        states_size = hidden_states.shape[1]
+        # Adding ability to pass hidden state info to IP Adapter
+        ref_hidden_states = joint_attention_kwargs.get('ref_hidden_states', None)
+        ip_layer_scale = joint_attention_kwargs.get('ip_layer_scale', 1.0)
+        zero_temb = joint_attention_kwargs.get('zero_temb', None)
+        ref_rotary_emb = joint_attention_kwargs.get('ref_rotary_emb', None)
+        ref_size = None
+
+        if ref_hidden_states is not None:
+          ref_size = ref_hidden_states.shape[1]
+            
         residual = hidden_states
         norm_hidden_states, gate = self.norm(hidden_states, emb=temb)
         mlp_hidden_states = self.act_mlp(self.proj_mlp(norm_hidden_states))
 
+        ############################
+        # Stand In Ref norm calc
+        ############################
+        if ref_hidden_states is not None:
+          ref_residual = ref_hidden_states
+          norm_ref_hidden_states, ref_gate = self.norm(ref_hidden_states, emb=zero_temb)
+          ref_mlp_hidden_states = self.act_mlp(self.proj_mlp(norm_ref_hidden_states))
+          # Cat ref with original hidden_states
+          norm_hidden_states = torch.cat([norm_hidden_states,norm_ref_hidden_states],dim=1)
+
+        ############################
+        # end 
+        #############################
         if attention_mask is not None:
             attention_mask = expand_flux_attention_mask(
                 hidden_states,
                 attention_mask,
             )
 
-        # Adding ability to pass hidden state info to IP Adapter
-        ip_encoder_hidden_states = None
-        ip_layer_scale = 1.0
-        if 'ip_hidden_states' in joint_attention_kwargs:
-            ip_encoder_hidden_states = joint_attention_kwargs['ip_hidden_states']
-        if 'ip_layer_scale' in joint_attention_kwargs:
-            ip_layer_scale = joint_attention_kwargs['ip_layer_scale']
-            
         # Attention.
         attn_output = self.attn(
             hidden_states=norm_hidden_states,
             image_rotary_emb=image_rotary_emb,
+            ref_rotary_emb=ref_rotary_emb,
             attention_mask=attention_mask,
-            ip_encoder_hidden_states=ip_encoder_hidden_states,
             layer_scale=ip_layer_scale,
+            ref_size = ref_size
         )    
-        #attn_output = self.attn(
-        #    hidden_states=norm_hidden_states,
-        #    image_rotary_emb=image_rotary_emb,
-        #    attention_mask=attention_mask,
-        #)
+        ############################
+        # Stand In - Split attn result
+        ############################
+        if ref_hidden_states is not None:
+          attn_output_ref = attn_output[:,states_size:]
+          attn_output = attn_output[:,:states_size]
+
+        #################
+        # end
+        #################
 
         hidden_states = torch.cat([attn_output, mlp_hidden_states], dim=2)
         gate = gate.unsqueeze(1)
         hidden_states = gate * self.proj_out(hidden_states)
         hidden_states = residual + hidden_states
 
+        ############################
+        # Stand In - Ref Out Proj
+        ############################
+        if ref_hidden_states is not None:
+          ref_hidden_states = torch.cat([attn_output_ref, ref_mlp_hidden_states], dim=2)
+          ref_gate = ref_gate.unsqueeze(1)
+          ref_hidden_states = ref_gate * self.proj_out(ref_hidden_states)
+          ref_hidden_states = ref_residual + ref_hidden_states
+        ##################
+        # end
+        ####################
+
         if hidden_states.dtype == torch.float16:
             hidden_states = hidden_states.clip(-65504, 65504)
 
-        return hidden_states
+        if ref_hidden_states.dtype == torch.float16:
+            ref_hidden_states = ref_hidden_states.clip(-65504, 65504)
+
+        return hidden_states, ref_hidden_states
 
 
 @maybe_allow_in_graph
@@ -345,9 +383,21 @@ class FluxTransformerBlock(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         joint_attention_kwargs: dict = {},
     ):
+
+        # Adding ability to pass hidden state info to IP Adapter
+
+        ref_hidden_states = joint_attention_kwargs.get('ref_hidden_states', None)
+        ip_layer_scale = joint_attention_kwargs.get('ip_layer_scale', 1.0)
+        zero_temb = joint_attention_kwargs.get('zero_temb', None)
+        ref_rotary_emb = joint_attention_kwargs.get('ref_rotary_emb', None)
+
+
         norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(
             hidden_states, emb=temb
         )
+
+        norm_ref_hidden_states, ref_gate_msa, ref_shift_mlp, ref_scale_mlp, ref_gate_mlp = self.norm1(ref_hidden_states, emb=zero_temb )
+        norm_hidden_states = torch.cat([norm_hidden_states,norm_ref_hidden_states],dim=1)
 
         norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = (
             self.norm1_context(encoder_hidden_states, emb=temb)
@@ -359,21 +409,15 @@ class FluxTransformerBlock(nn.Module):
                 attention_mask,
             )
 
-        # Adding ability to pass hidden state info to IP Adapter
-        ip_encoder_hidden_states = None
-        ip_layer_scale = 1.0
-        if 'ip_hidden_states' in joint_attention_kwargs:
-            ip_encoder_hidden_states = joint_attention_kwargs['ip_hidden_states']
-        if 'ip_layer_scale' in joint_attention_kwargs:
-            ip_layer_scale = joint_attention_kwargs['ip_layer_scale']
+
 
         # Attention.
         attention_outputs = self.attn(
             hidden_states=norm_hidden_states,
             encoder_hidden_states=norm_encoder_hidden_states,
             image_rotary_emb=image_rotary_emb,
+            ref_rotary_emb=ref_rotary_emb,
             attention_mask=attention_mask,
-            ip_encoder_hidden_states=ip_encoder_hidden_states,
             layer_scale=ip_layer_scale,
         )
         if len(attention_outputs) == 2:
@@ -622,8 +666,8 @@ class LibreFluxTransformer2DModel(
             `tuple` where the first element is the sample tensor.
         """
         if joint_attention_kwargs is not None:
-            joint_attention_kwargs = joint_attention_kwargs.copy()
-            lora_scale = joint_attention_kwargs.pop("scale", 1.0)
+            ref_img_ids = joint_attention_kwargs.get("ref_image_ids", None)
+            lora_scale = joint_attention_kwargs.get("scale", 1.0)
         else:
             lora_scale = 1.0
 
@@ -641,18 +685,19 @@ class LibreFluxTransformer2DModel(
         hidden_states = self.x_embedder(hidden_states)
 
         timestep = timestep.to(hidden_states.dtype) * 1000
-        if guidance is not None:
-            guidance = guidance.to(hidden_states.dtype) * 1000
-        else:
-            guidance = None
+        
+        guidance = None
 
-        #print( self.time_text_embed)
-        temb = (
-            self.time_text_embed(timestep,pooled_projections)
-            # Edit 1 # Charlie   NOT NEEDED - UNDONE
-            if guidance is None
-            else self.time_text_embed(timestep, guidance, pooled_projections)
-        )
+        temb = self.time_text_embed(timestep,pooled_projections)
+        
+        #########################
+        # Stand in temb
+        ##########################
+        zero_timestep = torch.zeros_like(timestep)
+        zero_temb = self.time_text_embed(zero_timestep, pooled_projections)
+        ######################
+        # end
+        #####################
         encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
         if txt_ids.ndim == 3:
@@ -663,6 +708,11 @@ class LibreFluxTransformer2DModel(
         ids = torch.cat((txt_ids, img_ids), dim=0)
 
         image_rotary_emb = self.pos_embed(ids)
+
+        if ref_img_ids is not None:
+          joint_attention_kwargs['ref_rotary_emb'] = self.pos_embed(ref_img_ids)
+          joint_attention_kwargs['zero_temb'] = zero_temb
+          joint_attention_kwargs['ref_hidden_states'] = self.x_embedder(joint_attention_kwargs['ref_hidden_states'] )
 
         # IP adapter
         """if (
@@ -766,7 +816,7 @@ class LibreFluxTransformer2DModel(
                 ckpt_kwargs: Dict[str, Any] = (
                     {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
                 )
-                hidden_states = torch.utils.checkpoint.checkpoint(
+                hidden_states, ref_hidden_states = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(block),
                     hidden_states,
                     temb,
@@ -778,7 +828,7 @@ class LibreFluxTransformer2DModel(
                 )
 
             else:
-                hidden_states = block(
+                hidden_states, ref_hidden_states = block(
                     hidden_states=hidden_states,
                     temb=temb,
                     image_rotary_emb=image_rotary_emb,

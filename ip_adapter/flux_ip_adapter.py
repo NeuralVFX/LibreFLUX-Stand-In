@@ -66,18 +66,19 @@ class LibreFluxStandInIPAdapter(nn.Module):
         all_params = chain(*adapter_param_list)
         return all_params
 
-    def forward(self, face_ref_hidden_states, *args, layer_scale= torch.Tensor([1.0]), **kwargs):
+    def forward(self, *args, layer_scale= torch.Tensor([1.0]),ref_img_ids=None,ref_hidden_states=None, **kwargs):
         """ Run projection and run forward """
 
 
         # Add ip hidden states to kwargs
         if 'joint_attention_kwargs' not in kwargs:
             kwargs['joint_attention_kwargs'] = {}
-        layer_scale = layer_scale.to(dtype=face_ref_hidden_states.dtype,
-        device=face_ref_hidden_states.device)   
+        layer_scale = layer_scale.to(dtype=ref_hidden_states.dtype,
+        device=ref_hidden_states.device)   
 
         kwargs['joint_attention_kwargs']['ip_layer_scale'] = layer_scale
-        kwargs['joint_attention_kwargs']['face_ref_hidden_states'] = face_ref_hidden_states
+        kwargs['joint_attention_kwargs']['ref_hidden_states'] = ref_hidden_states
+        kwargs['joint_attention_kwargs']['ref_img_ids'] = ref_img_ids
 
         output = self.transformer(*args,
                 **kwargs)
