@@ -446,8 +446,6 @@ def main():
         variant=variant,
     )
 
-    image_encoder = SiglipVisionModel.from_pretrained(
-        args.image_encoder_path)
 
     noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
         args.pretrained_model_name_or_path,
@@ -459,25 +457,19 @@ def main():
     vae.requires_grad_(False)
     text_encoder_one.requires_grad_(False)
     text_encoder_two.requires_grad_(False)
-    image_encoder.requires_grad_(False)
+
 
     transformer.eval()
     vae.eval()
     text_encoder_one.eval()
     text_encoder_two.eval()
-    image_encoder.eval() 
 
     global_step = 0
-
-    image_proj_model = ImageProjModel( clip_dim = image_encoder.config.hidden_size,
-                                       cross_attention_dim=4096,
-                                       num_tokens=128)
     
     # To be used for training, and saving and loading weights
     if args.pretrained_ip_adapter_path is not None:
         
-        ip_adapter = LibreFluxIPAdapter(transformer,
-                                        image_proj_model,
+        ip_adapter = LibreFluxStandInIPAdapter(transformer,
                                         checkpoint=args.pretrained_ip_adapter_path)
         try:
             global_step = int( args.pretrained_ip_adapter_path.split('-')[1].split('.')[0])
@@ -486,7 +478,7 @@ def main():
         except:
             print ('Couldnt Detect Global Step from pretrained_ip_adapter_path, starting from zero')
     else:
-        ip_adapter = LibreFluxIPAdapter(transformer,image_proj_model)
+        ip_adapter = LibreFluxStandInIPAdapter(transformer)
 
 
     ip_adapter.train()
@@ -499,7 +491,6 @@ def main():
             text_encoder_2 =text_encoder_two,
             tokenizer_2=tokenizer_two,
             transformer=transformer,
-            image_encoder=image_encoder,
             ip_adapter=ip_adapter,
     )
     
@@ -516,7 +507,6 @@ def main():
     vae.to(dtype=weight_dtype)
     text_encoder_one.to(dtype=weight_dtype)
     text_encoder_two.to(dtype=weight_dtype)
-    image_encoder.to(dtype=weight_dtype)
 
     # Quantize to save ram
     if args.quantize:
@@ -545,7 +535,6 @@ def main():
     text_encoder_one.to(accelerator.device)
     text_encoder_two.to(accelerator.device)
     ip_adapter.to(accelerator.device)
-    image_encoder.to(accelerator.device)  
 
 
     #################################
