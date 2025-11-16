@@ -9,31 +9,7 @@ from diffusers.models.attention_processor import (
 from ip_adapter.flux_attention_processor import *
 
 
-class ImageProjModel(nn.Module):
-    def __init__(self, clip_dim=768, cross_attention_dim=4096, num_tokens=16):
-        super().__init__()
-
-        self.num_tokens = num_tokens
-        self.cross_attention_dim = cross_attention_dim
-        self.clip_dim = clip_dim
-
-        self.proj = torch.nn.Sequential(
-            torch.nn.Linear(clip_dim,clip_dim*2),
-            torch.nn.GELU(),
-            torch.nn.Linear(clip_dim*2, cross_attention_dim*num_tokens),
-        )        
-        self.norm = torch.nn.LayerNorm(cross_attention_dim)
-    
-    def forward(self,input):
-        
-        raw_proj = self.proj(input)
-        reshaped_proj = raw_proj.reshape(input.shape[0],self.num_tokens,self.cross_attention_dim)
-        reshaped_proj = self.norm( reshaped_proj )
-
-        return reshaped_proj
-
-
-class LibreFluxIPAdapter(nn.Module):
+class LibreFluxStandInIPAdapter(nn.Module):
     def __init__(self, transformer, image_proj_model, checkpoint=None):
         super().__init__()
         self.transformer = transformer
@@ -55,7 +31,7 @@ class LibreFluxIPAdapter(nn.Module):
             self.load_from_checkpoint(checkpoint)
 
     def wrap_attention_blocks(self,scale=1.0, num_tokens=16):
-        """ Inject the IP-Adapter modules into the Transformer model """
+        """ Inject the stand-in IP-Adapter modules into the Transformer model """
         sample_attn = self.transformer.transformer_blocks[0].attn
 
         hidden_size = sample_attn.inner_dim
@@ -88,22 +64,21 @@ class LibreFluxIPAdapter(nn.Module):
             module = self.culled_transformer_blocks[name]            
             adapter_param_list.append(module.processor.parameters())
                     
-        all_params = chain(*adapter_param_list,self.image_proj_model.parameters())
+        all_params = chain(*adapter_param_list)
         return all_params
 
-    def forward(self, ref_image, *args, layer_scale= torch.Tensor([1.0]), **kwargs):
+    def forward(self, face_ref_hidden_states, *args, layer_scale= torch.Tensor([1.0]), **kwargs):
         """ Run projection and run forward """
 
-        ip_encoder_hidden_states = self.image_proj_model(ref_image)
 
         # Add ip hidden states to kwargs
         if 'joint_attention_kwargs' not in kwargs:
             kwargs['joint_attention_kwargs'] = {}
-        layer_scale = layer_scale.to(dtype=ip_encoder_hidden_states.dtype,
-        device=ip_encoder_hidden_states.device)   
+        layer_scale = layer_scale.to(dtype=face_ref_hidden_states.dtype,
+        device=face_ref_hidden_states.device)   
 
         kwargs['joint_attention_kwargs']['ip_layer_scale'] = layer_scale
-        kwargs['joint_attention_kwargs']['ip_hidden_states'] = ip_encoder_hidden_states
+        kwargs['joint_attention_kwargs']['face_ref_hidden_states'] = face_ref_hidden_states
 
         output = self.transformer(*args,
                 **kwargs)
@@ -114,8 +89,7 @@ class LibreFluxIPAdapter(nn.Module):
         """ Save model weights """
         state_dict = {}
 
-        state_dict["image_proj"] = self.image_proj_model.state_dict()
-        state_dict["ip_adapter"] = self.adapter_modules.state_dict()
+        state_dict["face_ip_adapter"] = self.adapter_modules.state_dict()
         torch.save(state_dict, ckpt_path)
 
     def load_from_checkpoint(self, ckpt_path):
@@ -127,22 +101,19 @@ class LibreFluxIPAdapter(nn.Module):
         state_dict = torch.load(ckpt_path, map_location="cpu")
 
         # Load state dict for image_proj_model and adapter_modules
-        self.image_proj_model.load_state_dict(state_dict["image_proj"], strict=True)
-        self.adapter_modules.load_state_dict(state_dict["ip_adapter"], strict=True)
+        self.adapter_modules.load_state_dict(state_dict["face_ip_adapter"], strict=True)
 
         # Calculate new checksums
-        new_ip_proj_sum = torch.sum(torch.stack([torch.sum(p) for p in self.image_proj_model.parameters()]))
         new_adapter_sum = torch.sum(torch.stack([torch.sum(p) for p in self.adapter_modules.parameters()]))
 
         # Verify if the weights have changed
-        assert orig_ip_proj_sum != new_ip_proj_sum, "Weights of image_proj_model did not change!"
         assert orig_adapter_sum != new_adapter_sum, "Weights of adapter_modules did not change!"
 
         print(f"Successfully loaded weights from checkpoint {ckpt_path}")
 
     @property
     def dtype(self):
-        return next(self.image_proj_model.parameters()).dtype
+        return next(self.parameters()).dtype
 
 ### Examples
 # Test

@@ -250,7 +250,7 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
         tokenizer_2: T5TokenizerFast,
         transformer: LibreFluxTransformer2DModel,
         image_encoder:  CLIPVisionModelWithProjection,
-        ip_adapter: LibreFluxIPAdapter,
+        ip_adapter: LibreFluxStandInIPAdapter,
     ):
         super().__init__()
 
@@ -552,6 +552,29 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
         )
       
         return latent_image_ids.to(dtype=dtype, device=device)
+
+    @staticmethod
+    def _prepare_ref_latent_image_ids(batch_size, height, width,ref_width,ref_height, device, dtype):
+        ref_latent_image_ids = torch.zeros(ref_height // 2, ref_width // 2, 3)
+        ref_latent_image_ids[..., 1] = (
+            ref_latent_image_ids[..., 1] + torch.arange(ref_height // 2)[:, None]+height
+        )
+        ref_latent_image_ids[..., 2] = (
+            ref_latent_image_ids[..., 2] + torch.arange(ref_width // 2)[None, :]+width
+        )
+
+        ref_latent_image_id_height, ref_latent_image_id_width, ref_latent_image_id_channels = (
+            ref_latent_image_ids.shape
+        )
+
+        ref_latent_image_ids = ref_latent_image_ids[None, :].repeat(batch_size, 1, 1, 1)
+        ref_latent_image_ids = ref_latent_image_ids.reshape(
+            batch_size,
+            ref_latent_image_id_height * ref_latent_image_id_width,
+            ref_latent_image_id_channels,
+        )
+        
+        return ref_latent_image_ids.to(dtype=dtype, device=device)  
 
     @staticmethod
     def _pack_latents(latents, batch_size, num_channels_latents, height, width):
