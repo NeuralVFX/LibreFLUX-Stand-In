@@ -589,6 +589,7 @@ def main():
             with accelerator.accumulate(ip_adapter):
 
                 pixel_values = batch["images"]
+                ref_pixel_values = batch["clip_image"]
 
                 with torch.no_grad():
 
@@ -627,6 +628,33 @@ def main():
                         accelerator.device,
                         weight_dtype,
                     )
+
+                    ##################################
+                    # Prepare Stand In Ref
+                    ##################################
+
+                    
+                    ref_model_input  = vae.encode(ref_pixel_values.to(dtype=weight_dtype)).latent_dist.sample()
+                    
+                    ref_model_input = (
+                        model_input - vae.config.shift_factor
+                    ) * vae.config.scaling_factor
+                    model_input = model_input.to(dtype=weight_dtype)
+                    vae_scale_factor = 2 ** (len(vae.config.block_out_channels))
+
+
+                    ref_image_ids = LibreFluxIpAdapterPipeline._prepare_ref_image_latent_image_ids(
+                        model_input.shape[0],
+                        model_input.shape[2],
+                        model_input.shape[3],
+                        accelerator.device,
+                        weight_dtype,
+                    )
+
+                    #################################
+                    # End -  Prepare Stand In Ref
+                    ################################
+
                     # Sample noise that we'll add to the latents
                     noise = torch.randn_like(model_input)
                     bsz = model_input.shape[0]
@@ -662,21 +690,23 @@ def main():
                             width=model_input.shape[3],
                         )
 
-                #################################
-                # Clip Encode IP Adapter Image
-                #################################    
+                    #########################
+                    # Pack Stand In Ref
+                    #########################
+                                        
+                    packed_ref_model_input = LibreFluxIpAdapterPipeline._pack_latents(
+                            ref_model_input,
+                            batch_size=model_input.shape[0],
+                            num_channels_latents=ref_model_input.shape[1],
+                            height=ref_model_input.shape[2],
+                            width=ref_model_input.shape[3],
+                        )
 
-                with torch.no_grad():
-                    
-                    image_embeds = image_encoder(batch["clip_images"].to(accelerator.device, dtype=weight_dtype)).pooler_output
-                image_embeds_ = []
-                for image_embed, drop_image_embed in zip(image_embeds, batch["drop_image_embeds"]):
-                    if drop_image_embed == 1:
-                        image_embeds_.append(torch.zeros_like(image_embed))
-                    else:
-                        image_embeds_.append(image_embed)
-                image_embeds = torch.stack(image_embeds_)
-            
+                    #########################
+                    # End Pack Stand In Ref
+                    #########################
+
+
                 #################################
                 # Forward Pass Through IP Adapter
                 #################################
@@ -686,8 +716,8 @@ def main():
                 text_ids = [ t for t in text_ids ]
 
                 model_pred = ip_adapter(
-                    image_embeds,
-                    packed_noisy_model_input,
+                    packed_ref_model_input,
+                    packed_noisy_model_input, # Added stand in ref input
                     timestep=timesteps,
                     guidance=guidance,
                     pooled_projections=pooled_prompt_embeds,
@@ -695,6 +725,7 @@ def main():
                     attention_mask=prompt_mask,
                     txt_ids=text_ids[0],
                     img_ids=latent_image_ids[0],
+                    ref_img_ids=ref_image_ids[0], # Added stand in ref input
                     return_dict=False,
                 )[0]
 
