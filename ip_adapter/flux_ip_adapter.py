@@ -94,7 +94,6 @@ class LibreFluxStandInIPAdapter(nn.Module):
     def load_from_checkpoint(self, ckpt_path):
         """ Loader ripped from tencent repo """
         # Calculate original checksums
-        orig_ip_proj_sum = torch.sum(torch.stack([torch.sum(p) for p in self.image_proj_model.parameters()]))
         orig_adapter_sum = torch.sum(torch.stack([torch.sum(p) for p in self.adapter_modules.parameters()]))
 
         state_dict = torch.load(ckpt_path, map_location="cpu")
