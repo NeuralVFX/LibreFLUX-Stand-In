@@ -10,10 +10,9 @@ from ip_adapter.flux_attention_processor import *
 
 
 class LibreFluxStandInIPAdapter(nn.Module):
-    def __init__(self, transformer, image_proj_model, checkpoint=None):
+    def __init__(self, transformer, checkpoint=None):
         super().__init__()
         self.transformer = transformer
-        self.image_proj_model = image_proj_model
 
         # Using startswith uses only double transformer blocks, and skips the single transformer blocks
         self.culled_transformer_blocks = {}
