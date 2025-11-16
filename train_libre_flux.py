@@ -637,7 +637,7 @@ def main():
                     ref_model_input  = vae.encode(ref_pixel_values.to(dtype=weight_dtype)).latent_dist.sample()
                     
                     ref_model_input = (
-                        model_input - vae.config.shift_factor
+                        ref_model_input - vae.config.shift_factor
                     ) * vae.config.scaling_factor
                     model_input = model_input.to(dtype=weight_dtype)
                     vae_scale_factor = 2 ** (len(vae.config.block_out_channels))
@@ -696,7 +696,7 @@ def main():
                                         
                     packed_ref_model_input = LibreFluxIpAdapterPipeline._pack_latents(
                             ref_model_input,
-                            batch_size=model_input.shape[0],
+                            batch_size=ref_model_input.shape[0],
                             num_channels_latents=ref_model_input.shape[1],
                             height=ref_model_input.shape[2],
                             width=ref_model_input.shape[3],
