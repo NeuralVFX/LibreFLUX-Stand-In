@@ -1,0 +1,9 @@
+optimum.quanto==0.2.7
+sentencepiece==0.2.1
+protobuf==5.29.5
+accelerate==1.11.0
+diffusers==0.35.2
+transformers==4.57.1
+datasets==4.0.0
+einops==0.8.1
+matplotlib==3.10.0
