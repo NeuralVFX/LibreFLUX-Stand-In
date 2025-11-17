@@ -256,6 +256,8 @@ class FluxSingleTransformerBlock(nn.Module):
         ############################
         # Stand In Ref norm calc
         ############################
+
+        # MUST calculate this here to use ZERO time Embedding
         if ref_hidden_states is not None:
           ref_residual = ref_hidden_states
           norm_ref_hidden_states, ref_gate = self.norm(ref_hidden_states, emb=zero_temb)
@@ -272,11 +274,18 @@ class FluxSingleTransformerBlock(nn.Module):
                 attention_mask,
             )
 
+        ######################
+        # concat rotary embeds
+        #######################
+        if ref_hidden_states is not None:
+            image_rotary_emb = torch.cat([image_rotary_emb, ref_rotary_emb], dim=0)
+        ########################
+        # Stand In - end concade rotary embeds
+        #######################
         # Attention.
         attn_output = self.attn(
             hidden_states=norm_hidden_states,
             image_rotary_emb=image_rotary_emb,
-            ref_rotary_emb=ref_rotary_emb,
             attention_mask=attention_mask,
             layer_scale=ip_layer_scale,
             ref_size = ref_size
@@ -312,8 +321,9 @@ class FluxSingleTransformerBlock(nn.Module):
         if hidden_states.dtype == torch.float16:
             hidden_states = hidden_states.clip(-65504, 65504)
 
-        if ref_hidden_states.dtype == torch.float16:
-            ref_hidden_states = ref_hidden_states.clip(-65504, 65504)
+        if ref_hidden_states is not None:
+          if ref_hidden_states.dtype == torch.float16:
+              ref_hidden_states = ref_hidden_states.clip(-65504, 65504)
 
         return hidden_states, ref_hidden_states
 
@@ -384,6 +394,7 @@ class FluxTransformerBlock(nn.Module):
         joint_attention_kwargs: dict = {},
     ):
 
+
         # Adding ability to pass hidden state info to IP Adapter
 
         ref_hidden_states = joint_attention_kwargs.get('ref_hidden_states', None)
@@ -391,14 +402,24 @@ class FluxTransformerBlock(nn.Module):
         zero_temb = joint_attention_kwargs.get('zero_temb', None)
         ref_rotary_emb = joint_attention_kwargs.get('ref_rotary_emb', None)
 
+        states_size = hidden_states.shape[1]
+        ref_size = 0
+        if ref_hidden_states is not None:
+          ref_size = ref_hidden_states.shape[1]
 
         norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(
             hidden_states, emb=temb
         )
 
-        norm_ref_hidden_states, ref_gate_msa, ref_shift_mlp, ref_scale_mlp, ref_gate_mlp = self.norm1(ref_hidden_states, emb=zero_temb )
-        norm_hidden_states = torch.cat([norm_hidden_states,norm_ref_hidden_states],dim=1)
-
+        #######################################
+        # Stand In - Seperate Norm with Zero Emb For Ref
+        ########################################
+        if ref_hidden_states is not None:
+          ref_norm_hidden_states, ref_gate_msa, ref_shift_mlp, ref_scale_mlp, ref_gate_mlp = self.norm1(ref_hidden_states, emb=zero_temb )
+          norm_hidden_states = torch.cat([norm_hidden_states,ref_norm_hidden_states],dim=1)
+          ###############################
+        # end
+        ############################
         norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = (
             self.norm1_context(encoder_hidden_states, emb=temb)
         )
@@ -409,21 +430,35 @@ class FluxTransformerBlock(nn.Module):
                 attention_mask,
             )
 
-
+        if ref_hidden_states is not None:
+            image_rotary_emb = torch.cat([image_rotary_emb, ref_rotary_emb], dim=0)
+     
 
         # Attention.
         attention_outputs = self.attn(
             hidden_states=norm_hidden_states,
             encoder_hidden_states=norm_encoder_hidden_states,
             image_rotary_emb=image_rotary_emb,
-            ref_rotary_emb=ref_rotary_emb,
             attention_mask=attention_mask,
             layer_scale=ip_layer_scale,
+            ref_size = ref_size
         )
+
         if len(attention_outputs) == 2:
             attn_output, context_attn_output = attention_outputs
         elif len(attention_outputs) == 3:
             attn_output, context_attn_output, ip_attn_output = attention_outputs
+
+        ############################
+        # Stand In - Split attn result
+        ############################
+        if ref_hidden_states is not None:
+          attn_output_ref = attn_output[:,states_size:]
+          attn_output = attn_output[:,:states_size]
+
+        #################
+        # end
+        #################
 
         # Process attention outputs for the `hidden_states`.
         attn_output = gate_msa.unsqueeze(1) * attn_output
@@ -434,15 +469,37 @@ class FluxTransformerBlock(nn.Module):
             norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
         )
 
+        #############################
+        # Stand In - Use Outputs of ref norm to stabalize
+        #############################
+        if ref_hidden_states is not None:
+          attn_output_ref = ref_gate_msa.unsqueeze(1) * attn_output_ref
+          ref_hidden_states = ref_hidden_states + attn_output_ref
+
+          ref_norm_hidden_states = self.norm2(ref_hidden_states)
+          ref_norm_hidden_states = (
+              ref_norm_hidden_states * (1 + ref_scale_mlp[:, None]) + ref_shift_mlp[:, None]
+          )
+        #################
+        # end
+        #################
         ff_output = self.ff(norm_hidden_states)
         ff_output = gate_mlp.unsqueeze(1) * ff_output
 
         hidden_states = hidden_states + ff_output
 
-        # Removing this, was casuing error after adding ip_adapter
-        #if len(attention_outputs) == 3:
-        #    hidden_states = hidden_states + ip_attn_output
+        #############################
+        # Stand In - Use Outputs of ref norm to stabalize
+        #############################
+        if ref_hidden_states is not None:
 
+          ref_ff_output = self.ff(ref_norm_hidden_states)
+          ref_ff_output = ref_gate_mlp.unsqueeze(1) * ref_ff_output
+
+          ref_hidden_states = ref_hidden_states + ref_ff_output
+        ########################
+        # end
+        ########################
         # Process attention outputs for the `encoder_hidden_states`.
         context_attn_output = c_gate_msa.unsqueeze(1) * context_attn_output
         encoder_hidden_states = encoder_hidden_states + context_attn_output
@@ -458,10 +515,11 @@ class FluxTransformerBlock(nn.Module):
             encoder_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output
         )
 
+
         if encoder_hidden_states.dtype == torch.float16:
             encoder_hidden_states = encoder_hidden_states.clip(-65504, 65504)
 
-        return encoder_hidden_states, hidden_states
+        return encoder_hidden_states, hidden_states, ref_hidden_states
 
 class LibreFluxTransformer2DModel(
     ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMixin
@@ -666,38 +724,43 @@ class LibreFluxTransformer2DModel(
             `tuple` where the first element is the sample tensor.
         """
         if joint_attention_kwargs is not None:
-            ref_img_ids = joint_attention_kwargs.get("ref_image_ids", None)
+
+            #########################
+            # Stand in args
+            ##########################
+            if joint_attention_kwargs.get('ref_hidden_states') is not None:
+
+              zero_timestep = torch.zeros_like(timestep)
+              zero_temb = self.time_text_embed(zero_timestep, pooled_projections)
+          
+              joint_attention_kwargs['ref_hidden_states'] = self.x_embedder(joint_attention_kwargs['ref_hidden_states'] )
+              ref_img_ids = joint_attention_kwargs.get("ref_img_ids", None)
+              joint_attention_kwargs['ref_rotary_emb'] = self.pos_embed(ref_img_ids)
+              joint_attention_kwargs['zero_temb'] = zero_temb
+                  
+            ######################
+            # end
+            #####################
             lora_scale = joint_attention_kwargs.get("scale", 1.0)
+
         else:
+            joint_attention_kwargs = {}
             lora_scale = 1.0
 
         if USE_PEFT_BACKEND:
             # weight the lora layers by setting `lora_scale` for each PEFT layer
             scale_lora_layers(self, lora_scale)
-        else:
-            if (
-                joint_attention_kwargs is not None
-                and joint_attention_kwargs.get("scale", None) is not None
-            ):
-                logger.warning(
-                    "Passing `scale` via `joint_attention_kwargs` when not using the PEFT backend is ineffective."
-                )
+
         hidden_states = self.x_embedder(hidden_states)
 
         timestep = timestep.to(hidden_states.dtype) * 1000
         
+        ## In LibreFlux we dont use Guidance
         guidance = None
 
         temb = self.time_text_embed(timestep,pooled_projections)
         
-        #########################
-        # Stand in temb
-        ##########################
-        zero_timestep = torch.zeros_like(timestep)
-        zero_temb = self.time_text_embed(zero_timestep, pooled_projections)
-        ######################
-        # end
-        #####################
+
         encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
         if txt_ids.ndim == 3:
@@ -709,22 +772,7 @@ class LibreFluxTransformer2DModel(
 
         image_rotary_emb = self.pos_embed(ids)
 
-        if ref_img_ids is not None:
-          joint_attention_kwargs['ref_rotary_emb'] = self.pos_embed(ref_img_ids)
-          joint_attention_kwargs['zero_temb'] = zero_temb
-          joint_attention_kwargs['ref_hidden_states'] = self.x_embedder(joint_attention_kwargs['ref_hidden_states'] )
 
-        # IP adapter
-        """if (
-            joint_attention_kwargs is not None
-            and "ip_adapter_image_embeds" in joint_attention_kwargs
-        ):
-            ip_adapter_image_embeds = joint_attention_kwargs.pop(
-                "ip_adapter_image_embeds"
-            )
-            ip_hidden_states = self.encoder_hid_proj(ip_adapter_image_embeds)
-            joint_attention_kwargs.update({"ip_hidden_states": ip_hidden_states})
-        """
         for index_block, block in enumerate(self.transformer_blocks):
             if (
                 self.training
@@ -747,7 +795,7 @@ class LibreFluxTransformer2DModel(
                 ckpt_kwargs: Dict[str, Any] = (
                     {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
                 )
-                encoder_hidden_states, hidden_states = (
+                encoder_hidden_states, hidden_states, ref_hidden_states = (
                     torch.utils.checkpoint.checkpoint(
                         create_custom_forward(block),
                         hidden_states,
@@ -758,10 +806,13 @@ class LibreFluxTransformer2DModel(
                         joint_attention_kwargs,  # Add this line
                         **ckpt_kwargs,
                     )
+                
                 )
+                joint_attention_kwargs['ref_hidden_states'] = ref_hidden_states
+
 
             else:
-                encoder_hidden_states, hidden_states = block(
+                encoder_hidden_states, hidden_states, ref_hidden_states = block(
                     hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     temb=temb,
@@ -769,6 +820,8 @@ class LibreFluxTransformer2DModel(
                     attention_mask=attention_mask,
                     joint_attention_kwargs=joint_attention_kwargs  # Add this line
                 )
+                joint_attention_kwargs['ref_hidden_states'] = ref_hidden_states
+
 
             # controlnet residual
             if controlnet_block_samples is not None:
@@ -826,6 +879,8 @@ class LibreFluxTransformer2DModel(
 
                     **ckpt_kwargs,
                 )
+                joint_attention_kwargs['ref_hidden_states'] = ref_hidden_states
+
 
             else:
                 hidden_states, ref_hidden_states = block(
@@ -836,6 +891,8 @@ class LibreFluxTransformer2DModel(
                     joint_attention_kwargs= joint_attention_kwargs,  # Add this line
 
                 )
+                joint_attention_kwargs['ref_hidden_states'] = ref_hidden_states
+
 
             # controlnet residual
             if controlnet_single_block_samples is not None:
