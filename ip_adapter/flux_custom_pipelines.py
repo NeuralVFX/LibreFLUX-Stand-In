@@ -249,7 +249,6 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
         text_encoder_2: T5EncoderModel,
         tokenizer_2: T5TokenizerFast,
         transformer: LibreFluxTransformer2DModel,
-        image_encoder:  CLIPVisionModelWithProjection,
         ip_adapter: LibreFluxStandInIPAdapter,
     ):
         super().__init__()
@@ -262,7 +261,6 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
             tokenizer_2=tokenizer_2,
             transformer=transformer,
             scheduler=scheduler,
-            image_encoder=image_encoder,
             ip_adapter=ip_adapter
 
         )

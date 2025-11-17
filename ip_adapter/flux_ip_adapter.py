@@ -66,7 +66,7 @@ class LibreFluxStandInIPAdapter(nn.Module):
         all_params = chain(*adapter_param_list)
         return all_params
 
-    def forward(self, *args, layer_scale= torch.Tensor([1.0]),ref_img_ids=None,ref_hidden_states=None, **kwargs):
+    def forward(self,ref_hidden_states, *args, layer_scale= torch.Tensor([1.0]),ref_img_ids=None, **kwargs):
         """ Run projection and run forward """
 
 

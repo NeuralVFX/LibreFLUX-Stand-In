@@ -278,7 +278,7 @@ class FluxSingleTransformerBlock(nn.Module):
         # concat rotary embeds
         #######################
         if ref_hidden_states is not None:
-            image_rotary_emb = torch.cat([image_rotary_emb, ref_rotary_emb], dim=0)
+            image_rotary_emb = (torch.cat([image_rotary_emb[0], ref_rotary_emb[0]], dim=0), torch.cat([image_rotary_emb[1], ref_rotary_emb[1]], dim=0))
         ########################
         # Stand In - end concade rotary embeds
         #######################
@@ -417,7 +417,7 @@ class FluxTransformerBlock(nn.Module):
         if ref_hidden_states is not None:
           ref_norm_hidden_states, ref_gate_msa, ref_shift_mlp, ref_scale_mlp, ref_gate_mlp = self.norm1(ref_hidden_states, emb=zero_temb )
           norm_hidden_states = torch.cat([norm_hidden_states,ref_norm_hidden_states],dim=1)
-          ###############################
+        ###############################
         # end
         ############################
         norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = (
@@ -429,10 +429,14 @@ class FluxTransformerBlock(nn.Module):
                 torch.cat([encoder_hidden_states, hidden_states], dim=1),
                 attention_mask,
             )
-
+        ########################
+        # Stand In -Cat rotary embeddings
+        ####################
         if ref_hidden_states is not None:
-            image_rotary_emb = torch.cat([image_rotary_emb, ref_rotary_emb], dim=0)
-     
+            image_rotary_emb = (torch.cat([image_rotary_emb[0], ref_rotary_emb[0]], dim=0), torch.cat([image_rotary_emb[1], ref_rotary_emb[1]], dim=0))
+        ##################
+        # End Cat
+        ######################
 
         # Attention.
         attention_outputs = self.attn(

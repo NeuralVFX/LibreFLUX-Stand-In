@@ -21,6 +21,35 @@ from typing import Any, Dict, List, Optional, Union
 import torch
 import torch.nn as nn
 
+
+class LoRALinearLayer(nn.Module):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        rank: int = 128,
+        device="cuda",
+        dtype: Optional[torch.dtype] = torch.float32,
+    ):
+        super().__init__()
+        self.down = nn.Linear(in_features, rank, bias=False, device=device, dtype=dtype)
+        self.up = nn.Linear(rank, out_features, bias=False, device=device, dtype=dtype)
+        self.rank = rank
+        self.out_features = out_features
+        self.in_features = in_features
+
+        nn.init.normal_(self.down.weight, std=1 / rank)
+        nn.init.zeros_(self.up.weight)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        orig_dtype = hidden_states.dtype
+        dtype = self.down.weight.dtype
+
+        down_hidden_states = self.down(hidden_states.to(dtype))
+        up_hidden_states = self.up(down_hidden_states)
+        return up_hidden_states.to(orig_dtype)
+
+
 class IPFluxAttnProcessor2_0(nn.Module):
     """Attention processor used typically in processing the SD3-like self-attention projections."""
 
@@ -186,9 +215,9 @@ class IPFluxAttnProcessor2_0(nn.Module):
         # Prep Rotary Emb
         #######################
         if ref_size is not None:
-          ref_rotary_emb = image_rotary_emb[-ref_size:]
-          image_rotary_emb = image_rotary_emb[:-ref_size]
-
+            ref_rotary_emb = (image_rotary_emb[0][-ref_size:], image_rotary_emb[1][-ref_size:])
+            image_rotary_emb = (image_rotary_emb[0][:-ref_size], image_rotary_emb[1][:-ref_size])
+            
         if image_rotary_emb is not None:
             from diffusers.models.embeddings import apply_rotary_emb
             query = apply_rotary_emb(query, image_rotary_emb)
@@ -217,7 +246,7 @@ class IPFluxAttnProcessor2_0(nn.Module):
         # Ref Query
         #######################################
 
-        # ref query
+        # ref query doesnt need attention masking, casue no prompt
         if ref_size is not None:
           ref_hidden_states = F.scaled_dot_product_attention(
               ref_query,
@@ -225,7 +254,6 @@ class IPFluxAttnProcessor2_0(nn.Module):
               ref_value,
               dropout_p=0.0,
               is_causal=False,
-              attn_mask=attention_mask,
           )
 
           ref_hidden_states = ref_hidden_states.transpose(1, 2).reshape(
@@ -245,6 +273,9 @@ class IPFluxAttnProcessor2_0(nn.Module):
         if ref_size is not None:
             cat_key = torch.cat([key, ref_key], dim=2)
             cat_value = torch.cat([value, ref_value], dim=2)
+        if attention_mask is not None:
+            ref_mask_ext = torch.ones(attention_mask.shape[0], attention_mask.shape[1], attention_mask.shape[2], ref_size, dtype=attention_mask.dtype, device=attention_mask.device)
+            attention_mask = torch.cat([attention_mask, ref_mask_ext], dim=-1)
         else:
             cat_key = key
             cat_value = value

@@ -589,7 +589,7 @@ def main():
             with accelerator.accumulate(ip_adapter):
 
                 pixel_values = batch["images"]
-                ref_pixel_values = batch["clip_image"]
+                ref_pixel_values = batch["clip_images"]
 
                 with torch.no_grad():
 
@@ -643,10 +643,12 @@ def main():
                     vae_scale_factor = 2 ** (len(vae.config.block_out_channels))
 
 
-                    ref_image_ids = LibreFluxIpAdapterPipeline._prepare_ref_image_latent_image_ids(
+                    ref_image_ids = LibreFluxIpAdapterPipeline._prepare_ref_latent_image_ids(
                         model_input.shape[0],
                         model_input.shape[2],
                         model_input.shape[3],
+                        ref_model_input.shape[2],
+                        ref_model_input.shape[3],
                         accelerator.device,
                         weight_dtype,
                     )
