@@ -76,7 +76,7 @@ class LibreFluxStandInIPAdapter(nn.Module):
         layer_scale = layer_scale.to(dtype=ref_hidden_states.dtype,
         device=ref_hidden_states.device)   
 
-        kwargs['joint_attention_kwargs']['ip_layer_scale'] = layer_scale
+        kwargs['joint_attention_kwargs']['ref_layer_scale'] = layer_scale
         kwargs['joint_attention_kwargs']['ref_hidden_states'] = ref_hidden_states
         kwargs['joint_attention_kwargs']['ref_img_ids'] = ref_img_ids
 

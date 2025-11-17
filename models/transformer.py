@@ -241,7 +241,7 @@ class FluxSingleTransformerBlock(nn.Module):
         states_size = hidden_states.shape[1]
         # Adding ability to pass hidden state info to IP Adapter
         ref_hidden_states = joint_attention_kwargs.get('ref_hidden_states', None)
-        ip_layer_scale = joint_attention_kwargs.get('ip_layer_scale', 1.0)
+        ip_layer_scale = joint_attention_kwargs.get('ref_layer_scale', 1.0)
         zero_temb = joint_attention_kwargs.get('zero_temb', None)
         ref_rotary_emb = joint_attention_kwargs.get('ref_rotary_emb', None)
         ref_size = None
@@ -398,7 +398,7 @@ class FluxTransformerBlock(nn.Module):
         # Adding ability to pass hidden state info to IP Adapter
 
         ref_hidden_states = joint_attention_kwargs.get('ref_hidden_states', None)
-        ip_layer_scale = joint_attention_kwargs.get('ip_layer_scale', 1.0)
+        ip_layer_scale = joint_attention_kwargs.get('ref_layer_scale', 1.0)
         zero_temb = joint_attention_kwargs.get('zero_temb', None)
         ref_rotary_emb = joint_attention_kwargs.get('ref_rotary_emb', None)
 

@@ -690,8 +690,8 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
         negative_pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
         no_cfg_until_timestep: int = 0,
         do_batch_cfg: bool=True,
-        ip_adapter_image: Image=None,
-        ip_adapter_scale: float=1.0,
+        ref_adapter_image: Image=None,
+        ref_adapter_scale: float=1.0,
         device=torch.device('cuda'), # TODO let this work with non-cuda stuff? Might if you set this to None
     ):
         r"""
@@ -864,6 +864,47 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
             latents,
         )
 
+
+        ##################################
+        # Prepare Stand In Ref
+        ##################################
+
+        ref_image_tensor = self.image_processor.preprocess(ref_adapter_image).to(device=device,dtype=self.vae.dtype)
+        ref_latents  = self.vae.encode(ref_image_tensor).latent_dist.sample()
+        
+        ref_latents = (
+            ref_latents - self.vae.config.shift_factor
+        ) * self.vae.config.scaling_factor
+        ref_latents = ref_latents.to(dtype=self.transformer.dtype)
+        vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels))
+
+
+        ref_img_ids = LibreFluxIpAdapterPipeline._prepare_ref_latent_image_ids(
+            num_channels_latents,
+            height,
+            width,
+            ref_latents.shape[2],
+            ref_latents.shape[3],
+            device,
+            self.transformer.dtype,
+        )
+
+        #########################
+        # Pack Stand In Ref
+        #########################
+                            
+        packed_ref_latents = LibreFluxIpAdapterPipeline._pack_latents(
+                ref_latents,
+                batch_size=ref_latents.shape[0],
+                num_channels_latents=ref_latents.shape[1],
+                height=ref_latents.shape[2],
+                width=ref_latents.shape[3],
+            )
+        layer_scale = torch.Tensor([ref_adapter_scale])
+        layer_scale_input = layer_scale
+        neg_layer_scale = torch.Tensor([0.0])
+
+
         # 5. Prepare timesteps
         sigmas = np.linspace(1.0, 1 / num_inference_steps, num_inference_steps)
         image_seq_len = latents.shape[1]
@@ -887,17 +928,10 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
         )
         self._num_timesteps = len(timesteps)
 
-        latents = latents
-        latent_image_ids = latent_image_ids
-        timesteps = timesteps
         text_ids = text_ids.to(device=device)
 
-        # handle guidance
-        if self.transformer.config.guidance_embeds:
-            guidance = torch.full([1], guidance_scale, device=device, dtype=torch.float32)
-            guidance = guidance.expand(latents.shape[0])
-        else:
-            guidance = None
+        # Libre Flux doesnt need guidance
+        guidance = None
 
         # Denoising loop
         with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -929,23 +963,14 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
                     )
 
                 # Forward pass through the transformer
-                with torch.no_grad():
-                    clip_image = self.clip_image_processor(images=ip_adapter_image,
-                                                           return_tensors="pt").pixel_values
-                    clip_image = clip_image.to(device=self.image_encoder.device,
-                                               dtype=self.image_encoder.dtype)
-                    image_embeds = self.image_encoder(clip_image).pooler_output
-                    image_embeds_input = image_embeds
-                    layer_scale = torch.Tensor([ip_adapter_scale])
-                    layer_scale_input = layer_scale
-                    neg_layer_scale = torch.Tensor([0.0])
+
 
 
                 if do_batch_cfg and guidance_scale_real > 1.0 and i >= no_cfg_until_timestep:
                     # Concatenate prompt embeddings
                     prompt_embeds_input = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
                     pooled_prompt_embeds_input = torch.cat([negative_pooled_prompt_embeds, pooled_prompt_embeds], dim=0)
-                    image_embeds_input =  torch.cat([image_embeds]*2, dim=0)
+                    ref_latents_input =  torch.cat([packed_ref_latents]*2, dim=0)
                     layer_scale_input = torch.cat([neg_layer_scale , layer_scale], dim=0)
                     # Concatenate text IDs if they are used
                     # if text_ids is not None and negative_text_ids is not None:
@@ -970,7 +995,7 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
                 text_ids = [ t for t in text_ids ]
 
                 noise_pred = self.ip_adapter(
-                    image_embeds_input.to(device=self.transformer.device),
+                    ref_latents_input.to(device=self.transformer.device),
                     latent_model_input.to(device=self.transformer.device),
                     layer_scale=layer_scale_input,
                     timestep=div_timestep.to(device=self.transformer.device),
@@ -980,6 +1005,7 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
                     attention_mask=prompt_mask_input.to(device=self.transformer.device),
                     txt_ids=text_ids_input[0],
                     img_ids=latent_image_ids_input[0].to(device=self.transformer.device),
+                    ref_img_ids=ref_img_ids[0],
                     return_dict=False,
                 )[0]
 
@@ -993,7 +1019,7 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
                         # Sequential CFG: Compute unconditional noise prediction separately
                         
                         noise_pred_uncond = self.ip_adapter(
-                        image_embeds,
+                        ref_latents_input.to(device=self.transformer.device),
                         latents.to(device=self.transformer.device),
                         layer_scale=neg_layer_scale,
                         timestep=div_timestep,
@@ -1002,7 +1028,7 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
                         encoder_hidden_states=negative_prompt_embeds.to(device=self.transformer.device),
                         attention_mask=negative_mask,
                         txt_ids=negative_text_ids.to(device=self.transformer.device) if negative_text_ids is not None else None,
-                        img_ids=latent_image_ids[0].to(device=self.transformer.device),
+                        ref_img_ids=ref_img_ids[0],
                         return_dict=False,
                     )[0]
 

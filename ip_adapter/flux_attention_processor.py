@@ -271,8 +271,10 @@ class IPFluxAttnProcessor2_0(nn.Module):
         # Cat Ref if needed
         #######################################
         if ref_size is not None:
-            cat_key = torch.cat([key, ref_key], dim=2)
-            cat_value = torch.cat([value, ref_value], dim=2)
+            layer_scale_expanded = layer_scale.view(-1, 1, 1, 1)
+            cat_key = torch.cat([key, layer_scale_expanded*ref_key], dim=2)
+            cat_value = torch.cat([value, layer_scale_expanded*ref_value], dim=2)
+            
         if attention_mask is not None:
             ref_mask_ext = torch.ones(attention_mask.shape[0], attention_mask.shape[1], attention_mask.shape[2], ref_size, dtype=attention_mask.dtype, device=attention_mask.device)
             attention_mask = torch.cat([attention_mask, ref_mask_ext], dim=-1)
