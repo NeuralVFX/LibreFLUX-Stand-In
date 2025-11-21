@@ -59,7 +59,7 @@ def gen_validation_images(pipe, test_dataloader, save_dir, iter, res):
             negative_prompt="blurry",
             return_dict=False,
             num_inference_steps=75, # Add control for step count
-            ip_adapter_image=pixel_values, 
+            ref_adapter_image=pixel_values, 
             height=res,
             width=res, 
             generator = torch.Generator(device="cuda").manual_seed(19005)
@@ -219,7 +219,7 @@ def parse_args():
         help="Path to pretrained model or model identifier from huggingface.co/models.",
     )
     parser.add_argument(
-        "--pretrained_ip_adapter_path",
+        "--pretrained_ref_adapter_path",
         type=str,
         default=None,
         help="Path to pretrained ip adapter model. If not specified weights are initialized randomly.",
@@ -251,13 +251,6 @@ def parse_args():
         default="",
         required=True,
         help="Validation data root path",
-    )
-    parser.add_argument(
-        "--image_encoder_path",
-        type=str,
-        default=None,
-        required=True,
-        help="Path to CLIP image encoder",
     )
     parser.add_argument(
         "--output_dir",
@@ -467,10 +460,10 @@ def main():
     global_step = 0
     
     # To be used for training, and saving and loading weights
-    if args.pretrained_ip_adapter_path is not None:
+    if args.pretrained_ref_adapter_path is not None:
         
         ip_adapter = LibreFluxStandInIPAdapter(transformer,
-                                        checkpoint=args.pretrained_ip_adapter_path)
+                                        checkpoint=args.pretrained_ref_adapter_path)
         try:
             global_step = int( args.pretrained_ip_adapter_path.split('-')[1].split('.')[0])
             print (f'Resuming at Global Step: {global_step}')
@@ -479,7 +472,6 @@ def main():
             print ('Couldnt Detect Global Step from pretrained_ip_adapter_path, starting from zero')
     else:
         ip_adapter = LibreFluxStandInIPAdapter(transformer)
-
 
     ip_adapter.train()
 
