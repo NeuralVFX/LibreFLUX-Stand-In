@@ -51,15 +51,18 @@ def gen_validation_images(pipe, test_dataloader, save_dir, iter, res):
     pipe.ip_adapter.eval() 
 
     for step, batch in enumerate(test_dataloader):
-        pixel_values = batch["pil_images"][0]
-        input_image_list.append(pixel_values)  # Store input image
+        pixel_values = batch["clip_images"][0]
         
+        input_img = (pixel_values.permute(1, 2, 0).cpu().numpy()+1)/2 if isinstance(pixel_values, torch.Tensor) else pixel_values
+        input_image_list.append(input_img)
+
         images = pipe(
             prompt=batch['text'][0],
             negative_prompt="blurry",
             return_dict=False,
             num_inference_steps=75, # Add control for step count
             ref_adapter_image=pixel_values, 
+            ref_adapter_scale=1.0,
             height=res,
             width=res, 
             generator = torch.Generator(device="cuda").manual_seed(19005)
@@ -126,6 +129,7 @@ class MyDataset(torch.utils.data.Dataset):
         
         
         # Moving this inside try to prevent crash for corrupted images
+        # This resizes to 384x384
         try:
             # read image
             raw_image = Image.open(os.path.join(self.image_root_path, image_file)).convert("RGB")
@@ -465,7 +469,7 @@ def main():
         ip_adapter = LibreFluxStandInIPAdapter(transformer,
                                         checkpoint=args.pretrained_ref_adapter_path)
         try:
-            global_step = int( args.pretrained_ip_adapter_path.split('-')[1].split('.')[0])
+            global_step = int( args.pretrained_ip_adapter_path.split('-')[-1].split('.')[0])
             print (f'Resuming at Global Step: {global_step}')
 
         except:

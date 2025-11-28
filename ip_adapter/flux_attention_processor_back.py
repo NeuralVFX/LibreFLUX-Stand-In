@@ -86,7 +86,7 @@ class IPFluxAttnProcessor2_0(nn.Module):
         ip_hidden_states = ip_encoder_hidden_states
         
         # `sample` projections.
-        #print ('attn processor ref_size:',ref_size)
+
         ###################################
         # Process latent and ref sep
         ###################################
@@ -181,7 +181,46 @@ class IPFluxAttnProcessor2_0(nn.Module):
         """
         # the attention in FluxSingleTransformerBlock does not use `encoder_hidden_states`
 
-        
+        """
+        #######################
+        # Prep Rotary Emb
+        #######################
+        if ref_size is not None and ref_size > 0:
+            ref_rotary_emb = (image_rotary_emb[0][-ref_size:], image_rotary_emb[1][-ref_size:])
+            image_rotary_emb = (image_rotary_emb[0][:-ref_size], image_rotary_emb[1][:-ref_size])
+            
+        if image_rotary_emb is not None:
+            from diffusers.models.embeddings import apply_rotary_emb
+            query = apply_rotary_emb(query, image_rotary_emb)
+            key = apply_rotary_emb(key, image_rotary_emb)
+
+        ##################
+        # Ref Rotary Emb
+        ##################
+        if ref_size is not None and ref_size > 0:
+            from diffusers.models.embeddings import apply_rotary_emb
+            ref_query = apply_rotary_emb(ref_query, ref_rotary_emb)
+            ref_key = apply_rotary_emb(ref_key, ref_rotary_emb)
+        """
+        ################
+        # Fix
+        #####################
+        if image_rotary_emb is not None:
+            from diffusers.models.embeddings import apply_rotary_emb
+            
+            # Handle Ref Split
+            if ref_size is not None and ref_size > 0:
+                ref_rotary_emb = (image_rotary_emb[0][-ref_size:], image_rotary_emb[1][-ref_size:])
+                image_rotary_emb = (image_rotary_emb[0][:-ref_size], image_rotary_emb[1][:-ref_size])
+                
+                # Rotate Ref
+                ref_query = apply_rotary_emb(ref_query, ref_rotary_emb)
+                ref_key = apply_rotary_emb(ref_key, ref_rotary_emb)
+            
+            # Rotate Image
+            query = apply_rotary_emb(query, image_rotary_emb)
+            key = apply_rotary_emb(key, image_rotary_emb)
+
         ##################
         # Moved after 
         #################
@@ -215,41 +254,7 @@ class IPFluxAttnProcessor2_0(nn.Module):
             query = torch.cat([encoder_hidden_states_query_proj, query], dim=2)
             key = torch.cat([encoder_hidden_states_key_proj, key], dim=2)
             value = torch.cat([encoder_hidden_states_value_proj, value], dim=2)
-      
-      
-        #if encoder_hidden_states is not None:
-        #  print ('Double Block')
-        #else:
-        #  print ('Single Block')
 
-
-       # print ('image_rotary_emb shape: ',image_rotary_emb[0].shape[0])
-
-
-        #######################
-        # Prep Rotary Emb
-        #######################
-        if ref_size is not None and ref_size > 0:
-            ref_rotary_emb = (image_rotary_emb[0][-ref_size:], image_rotary_emb[1][-ref_size:])
-            image_rotary_emb = (image_rotary_emb[0][:-ref_size], image_rotary_emb[1][:-ref_size])
-            
-
-        #print(f"query shape: {query.shape}, image_rotary_emb[0] shape: {image_rotary_emb[0].shape}")
-        
-        if image_rotary_emb is not None:
-            from diffusers.models.embeddings import apply_rotary_emb
-            query = apply_rotary_emb(query, image_rotary_emb)
-            key = apply_rotary_emb(key, image_rotary_emb)
-
-        ##################
-        # Ref Rotary Emb
-        ##################
-        if ref_size is not None and ref_size > 0:
-
-            from diffusers.models.embeddings import apply_rotary_emb
-            ref_query = apply_rotary_emb(ref_query, ref_rotary_emb)
-            ref_key = apply_rotary_emb(ref_key, ref_rotary_emb)
-        
 
         ###################
         # End Ref Rotary

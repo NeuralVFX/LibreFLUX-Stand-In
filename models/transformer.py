@@ -248,7 +248,13 @@ class FluxSingleTransformerBlock(nn.Module):
 
         if ref_hidden_states is not None:
           ref_size = ref_hidden_states.shape[1]
-            
+
+          #print ('Single Block')
+          #print(f"states_size: {states_size}, hidden_states.shape: {hidden_states.shape}")
+
+          #print(f"ref_size: {ref_size}, ref_hidden_states.shape: {ref_hidden_states.shape}")
+
+
         residual = hidden_states
         norm_hidden_states, gate = self.norm(hidden_states, emb=temb)
         mlp_hidden_states = self.act_mlp(self.proj_mlp(norm_hidden_states))
@@ -406,6 +412,10 @@ class FluxTransformerBlock(nn.Module):
         ref_size = 0
         if ref_hidden_states is not None:
           ref_size = ref_hidden_states.shape[1]
+        #  print ('Double Block')
+        #  print(f"states_size: {states_size}, hidden_states.shape: {hidden_states.shape}")
+
+        #  print(f"ref_size: {ref_size}, ref_hidden_states.shape: {ref_hidden_states.shape}")
 
         norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(
             hidden_states, emb=temb

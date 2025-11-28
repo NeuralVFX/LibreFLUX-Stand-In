@@ -73,8 +73,9 @@ class LibreFluxStandInIPAdapter(nn.Module):
         # Add ip hidden states to kwargs
         if 'joint_attention_kwargs' not in kwargs:
             kwargs['joint_attention_kwargs'] = {}
-        layer_scale = layer_scale.to(dtype=ref_hidden_states.dtype,
-        device=ref_hidden_states.device)   
+        if ref_hidden_states is not None:
+          layer_scale = layer_scale.to(dtype=ref_hidden_states.dtype,
+          device=ref_hidden_states.device)   
 
         kwargs['joint_attention_kwargs']['ref_layer_scale'] = layer_scale
         kwargs['joint_attention_kwargs']['ref_hidden_states'] = ref_hidden_states
