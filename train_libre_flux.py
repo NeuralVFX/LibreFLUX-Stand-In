@@ -30,16 +30,26 @@ from diffusers.training_utils import (
     compute_loss_weighting_for_sd3,
 )
 
+                                                                                                                 
+import torch                                                                                                      
+from torch.utils.data import Dataset                                                                              
+import os                                                                                                         
+import json                                                                                                       
+import glob                                                                                                       
+from PIL import Image                                                                                             
+import numpy as np                                                                                                
+from torchvision import transforms                                                                                
+import random                                                                                                     
+import cv2                                                                                                        
+
+
 from ip_adapter.flux_ip_adapter import *
 from ip_adapter.utils import is_torch2_available
 from ip_adapter.flux_custom_pipelines import *
 
 from models.transformer import *
 from models import encode_prompt_helper
-#if is_torch2_available():
-#    from ip_adapter.attention_processor import IPAttnProcessor2_0 as IPAttnProcessor, AttnProcessor2_0 as AttnProcessor
-#else:
-#    from ip_adapter.attention_processor import IPAttnProcessor, AttnProcessor
+
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -51,7 +61,7 @@ def gen_validation_images(pipe, test_dataloader, save_dir, iter, res):
     pipe.ip_adapter.eval() 
 
     for step, batch in enumerate(test_dataloader):
-        pixel_values = batch["clip_images"][0]
+        pixel_values = batch["face_images"][0]
         
         input_img = (pixel_values.permute(1, 2, 0).cpu().numpy()+1)/2 if isinstance(pixel_values, torch.Tensor) else pixel_values
         input_image_list.append(input_img)
@@ -98,118 +108,158 @@ def gen_validation_images(pipe, test_dataloader, save_dir, iter, res):
 
     pipe.ip_adapter.train()
 
-# Dataset
-class MyDataset(torch.utils.data.Dataset):
 
-    def __init__(self, json_file, size=1024, center_crop=True, t_drop_rate=0.05, i_drop_rate=0.05, ti_drop_rate=0.05, image_root_path=""):
-        super().__init__()
+class VFHQIpDataset(Dataset):                                                                                   
+     def __init__(self,                                                                                            
+                  json_dir,                                                                                        
+                  face_size=512,                                                                                   
+                  full_size=1024,                                                                                  
+                  t_drop_rate=0.01,                                                                                
+                  i_drop_rate=0.01,                                                                                
+                  ti_drop_rate=0.01, 
+                  lock=False,                                                                              
+                  buffer=1.05):                                                                                    
+                                                                                                                   
+         super().__init__()                                                                                        
+                                                                                                                   
+         self.json_dir = json_dir                                                                                  
+         self.face_size = face_size                                                                                
+         self.full_size = full_size                                                                                
+         self.t_drop_rate = t_drop_rate                                                                            
+         self.i_drop_rate = i_drop_rate                                                                            
+         self.ti_drop_rate = ti_drop_rate   
+         self.lock = lock                                                                       
+         self.buffer = buffer                                                                                      
+                                                                                                                   
+         # Load all JSON files                                                                                     
+                                                                                                                   
+         # Flatten all samples into a single list                                                                  
+         self.samples = []
+         jsonl_path = os.path.join(self.json_dir ,'dataset.jsonl' ) 
+                                                                                                                          
+         with open(jsonl_path, 'r') as f:                                                                              
+            for line in f:                                                                                            
+                self.samples.append(json.loads(line.strip()))                                                          
+                                                                                                                   
+         print(f" Loaded {len(self.samples)} sample JSON files")                         
+                                                                                                                   
+         # Define transforms                                                                                       
+         self.face_transform = transforms.Compose([                                                                
+             transforms.Resize((face_size, face_size), interpolation=transforms.InterpolationMode.BILINEAR),       
+             transforms.ToTensor(),                                                                                
+             transforms.Normalize([0.5], [0.5]),                                                                   
+         ])                                                                                                        
+                                                                                                                   
+         self.full_transform = transforms.Compose([                                                                
+             transforms.Resize((full_size, full_size), interpolation=transforms.InterpolationMode.BILINEAR),       
+             transforms.ToTensor(),                                                                                
+             transforms.Normalize([0.5], [0.5]),                                                                   
+         ])                                                                                                        
+                                                                                                                   
+     def __len__(self):                                                                                            
+         return len(self.samples)                                                                                  
+                                                                                                                   
+     def __getitem__(self, idx):      
+         data_dict = self.samples[idx]
+   
 
-        self.size = size
-        self.center_crop = center_crop
-        self.i_drop_rate = i_drop_rate
-        self.t_drop_rate = t_drop_rate
-        self.ti_drop_rate = ti_drop_rate
-        self.image_root_path = image_root_path
-    
-        self.data = json.load(open(json_file)) # list of dict: [{"image_file": "1.png", "text": "A dog"}]
+         # Select two different indices 
+         if self.lock:
+          full_img_choice=0   
+          face_img_choice=len((data_dict))-1   
+         else:                                                                     
+          choices = [int(i) for i in range(len(data_dict))]
+          full_img_choice = random.choice(choices)
+          choices.pop(full_img_choice)
+          face_img_choice = random.choice(choices) 
 
-        self.transform = transforms.Compose([
-            transforms.Resize(self.size, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5], [0.5]),
-        ])
+         full_dict = data_dict[full_img_choice]                                                                        
+         face_dict = data_dict[face_img_choice]                                                                        
+                                                                                                                   
+         # Load images                                                                                             
+         full_image_path = os.path.join(self.json_dir, full_dict['full_path'])                                     
+         face_image_path = os.path.join(self.json_dir, face_dict['crop_path'])                                     
+                                                                                                                   
+         full_image = Image.open(full_image_path).convert('RGB')                                                   
+         face_image = self.remove_alpha_with_grey_bg(Image.open(face_image_path))                                  
+                                                                                                                   
+         # Apply random crop to full image                                                                         
+         full_image_np = np.array(full_image)                                                                      
+         crop_coords = self.get_random_crop(                                                                       
+             full_image_np,                                                                                        
+             full_dict['crop_x'],                                                                                  
+             full_dict['crop_y'],                                                                                  
+             self.buffer                                                                                           
+         )                                                                                                         
+         cropped_full = full_image.crop((crop_coords[0], crop_coords[2],                                           
+                                         crop_coords[1], crop_coords[3]))                                          
+                                                                                                                   
+         # Transform                                                                                               
+         full_tensor = self.full_transform(cropped_full)                                                           
+         face_tensor = self.face_transform(face_image)                                                             
+                                                                                                                   
+         # Text and dropout logic                                                                                  
+         text = full_dict['caption']                                          
+         drop_image_embed = 0                                                                                      
+         rand_num = random.random()                                                                                
+                                                                                                                   
+         if rand_num < self.i_drop_rate:                                                                           
+             drop_image_embed = 1                                                                                  
+         elif rand_num < (self.i_drop_rate + self.t_drop_rate):                                                    
+             text = ""                                                                                             
+         elif rand_num < (self.i_drop_rate + self.t_drop_rate + self.ti_drop_rate):                                
+             text = ""                                                                                             
+             drop_image_embed = 1                                                                                  
+                                                                                                                   
+         return {                                                                                                  
+             "image": full_tensor,                                                                                 
+             "text": text,                                                                                         
+             "face_image": face_tensor,                                                                            
+             "drop_image_embed": drop_image_embed,                                                                 
+         }                                                                                                         
+                                                                                                                   
+     def get_random_crop(self, image, crop_x, crop_y, buffer=1.05):                                                
+         x_shape = image.shape[1]                                                                                  
+         y_shape = image.shape[0]                                                                                  
+         smallest_edge = min(y_shape, x_shape)                                                                     
+         face_width = crop_x[1] - crop_x[0]                                                                        
+         min_size = min(int(face_width * buffer), smallest_edge)                                                   
+         crop_size = random.randint(min_size, smallest_edge)                                                       
+         radius = crop_size // 2                                                                                   
+                                                                                                                   
+         min_x = max(radius, crop_x[1] - radius)                                                                   
+         max_x = min(x_shape - radius, crop_x[0] + radius)                                                         
+         min_y = max(radius, crop_y[1] - radius)                                                                   
+         max_y = min(y_shape - radius, crop_y[0] + radius)                                                         
+                                                                                                                   
+         rand_x = random.randint(min_x, max_x)                                                                     
+         rand_y = random.randint(min_y, max_y)                                                                     
+                                                                                                                   
+         return rand_x - radius, rand_x + radius, rand_y - radius, rand_y + radius                                 
+                                                                                                                   
+     def remove_alpha_with_grey_bg(self, image, grey_value=128):                                                   
+         if image.mode == 'RGBA':                                                                                  
+             background = Image.new('RGB', image.size, (grey_value, grey_value, grey_value))                       
+             background.paste(image, mask=image.split()[3])                                                        
+             return background                                                                                     
+         return image.convert('RGB')     
 
-        #self.clip_image_processor = CLIPImageProcessor()
-        self.clip_image_processor = AutoProcessor.from_pretrained("google/siglip-so400m-patch14-384")
-        
-    def __getitem__(self, idx):
-        item = self.data[idx] 
-        text = item["text"]
-        image_file = item["image_file"]
-        
-        
-        # Moving this inside try to prevent crash for corrupted images
-        # This resizes to 384x384
-        try:
-            # read image
-            raw_image = Image.open(os.path.join(self.image_root_path, image_file)).convert("RGB")
-            clip_image = self.clip_image_processor(images=raw_image.convert("RGB"), return_tensors="pt").pixel_values
-        except Exception as e:
-            raw_image = Image.new('RGB', (self.size, self.size), (0, 0, 0))
-            clip_image = self.clip_image_processor(images=raw_image, return_tensors="pt").pixel_values
-            print (f'WARNING: Image failed to open: {image_file}')
-            print (e)
-
-        # original size
-        original_width, original_height = raw_image.size
-        original_size = torch.tensor([original_height, original_width])
-        
-        image_tensor = self.transform(raw_image)
-        # random crop
-        delta_h = image_tensor.shape[1] - self.size
-        delta_w = image_tensor.shape[2] - self.size
-        assert not all([delta_h, delta_w])
-        
-        if self.center_crop:
-            top = delta_h // 2
-            left = delta_w // 2
-        else:
-            top = np.random.randint(0, delta_h + 1)
-            left = np.random.randint(0, delta_w + 1)
-        image = transforms.functional.crop(
-            image_tensor, top=top, left=left, height=self.size, width=self.size
-        )
-        crop_coords_top_left = torch.tensor([top, left]) 
-
-
-        # drop
-        drop_image_embed = 0
-        rand_num = random.random()
-        if rand_num < self.i_drop_rate:
-            drop_image_embed = 1
-        elif rand_num < (self.i_drop_rate + self.t_drop_rate):
-            text = ""
-        elif rand_num < (self.i_drop_rate + self.t_drop_rate + self.ti_drop_rate):
-            text = ""
-            drop_image_embed = 1
-
-        
-        return {
-            "image": image,
-            "pil_image":raw_image,
-            "text": text,
-            "clip_image": clip_image,
-            "drop_image_embed": drop_image_embed,
-            "original_size": original_size,
-            "crop_coords_top_left": crop_coords_top_left,
-            "target_size": torch.tensor([self.size, self.size]),
-        }
-        
-    
-    def __len__(self):
-        return len(self.data)
-    
 
 def collate_fn(data):
     images = torch.stack([example["image"] for example in data])
     text = [example["text"] for example in data]
-    pil_images = [example["pil_image"] for example in data]
-
-    clip_images = torch.cat([example["clip_image"] for example in data], dim=0)
+    face_images = torch.stack([example["face_image"] for example in data])
+    
     drop_image_embeds = [example["drop_image_embed"] for example in data]
-    original_size = torch.stack([example["original_size"] for example in data])
-    crop_coords_top_left = torch.stack([example["crop_coords_top_left"] for example in data])
-    target_size = torch.stack([example["target_size"] for example in data])
+    for i, drop in enumerate(drop_image_embeds):                                                             
+        if drop == 1:                                                                                                 
+            face_images[i] = torch.zeros_like(face_images[i])  
 
     return {
         "images": images,
-        "pil_images":pil_images,
+        "face_images":face_images,
         "text": text,
-        "clip_images": clip_images,
         "drop_image_embeds": drop_image_embeds,
-        "original_size": original_size,
-        "crop_coords_top_left": crop_coords_top_left,
-        "target_size": target_size,
     }
 
 
@@ -229,25 +279,11 @@ def parse_args():
         help="Path to pretrained ip adapter model. If not specified weights are initialized randomly.",
     )
     parser.add_argument(
-        "--data_json_file",
-        type=str,
-        default=None,
-        required=True,
-        help="Training data",
-    )
-    parser.add_argument(
         "--data_root_path",
         type=str,
         default="",
         required=True,
         help="Test data root path",
-    )
-    parser.add_argument(
-        "--val_data_json_file",
-        type=str,
-        default=None,
-        required=True,
-        help="Validation data",
     )
     parser.add_argument(
         "--val_data_root_path",
@@ -277,6 +313,14 @@ def parse_args():
         default=512,
         help=(
             "The resolution for input images"
+        ),
+    )
+    parser.add_argument(
+        "--ip_resolution",
+        type=int,
+        default=512,
+        help=(
+            "The resolution for ref images"
         ),
     )
     parser.add_argument(
@@ -539,25 +583,40 @@ def main():
 
     # optimizer
     optimizer = torch.optim.AdamW(ip_adapter.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
-    
-    # dataloaders
-    train_dataset = MyDataset(args.data_json_file, size=args.resolution, image_root_path=args.data_root_path)
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset,
-        shuffle=True,
-        collate_fn=collate_fn,
-        batch_size=args.train_batch_size,
-        num_workers=args.dataloader_num_workers,
-    )
-    
-    val_dataset = MyDataset(args.val_data_json_file, size=args.resolution, image_root_path=args.val_data_root_path)
-    val_dataloader = torch.utils.data.DataLoader(
-        val_dataset,
-        shuffle=False,
-        collate_fn=collate_fn,
-        batch_size=1,
-        num_workers=args.dataloader_num_workers,
-    )
+        
+    train_dataset = VFHQIpDataset(                                                                                  
+        json_dir=args.data_root_path,                  
+        face_size=args.ip_resolution,             
+        full_size=args.resolution,                                                                                                                                                                                    
+    )                                                                                                                 
+                                                                                                                      
+    train_dataloader = torch.utils.data.DataLoader(                                                                   
+        train_dataset,                                                                                                
+        shuffle=True,                                                                                                 
+        collate_fn=collate_fn,                                                                                        
+        batch_size=args.train_batch_size,                                                                             
+        num_workers=args.dataloader_num_workers,                                                                      
+    )                                                                                                                 
+                                                                                                                      
+    val_dataset = VFHQIpDataset(                                                                                    
+        json_dir=args.val_data_root_path,                   
+        face_size=args.ip_resolution,                                                                                                                                                        
+        full_size=args.resolution,   
+        t_drop_rate=0.0, 
+        i_drop_rate=0.0, 
+        ti_drop_rate=0.0,   
+        lock=True                                                                              
+                                                                                                  
+    )                                                                                                                 
+                                                                                                                      
+    val_dataloader = torch.utils.data.DataLoader(                                                                     
+        val_dataset,                                                                                                  
+        shuffle=False,                                                                                                
+        collate_fn=collate_fn,                                                                                        
+        batch_size=1,                                                                                                 
+        num_workers=args.dataloader_num_workers,                                                                      
+    )                                                                                                                 
+                  
 
     def get_sigmas(timesteps, n_dim=4, dtype=torch.float32):
         sigmas = noise_scheduler_copy.sigmas.to(device=accelerator.device, dtype=dtype)
@@ -584,8 +643,9 @@ def main():
             load_data_time = time.perf_counter() - begin
             with accelerator.accumulate(ip_adapter):
 
+
                 pixel_values = batch["images"]
-                ref_pixel_values = batch["clip_images"]
+                ref_pixel_values = batch["face_images"]
 
                 with torch.no_grad():
 
