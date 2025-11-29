@@ -277,9 +277,6 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
         )
         self.default_sample_size = 64
 
-        #self.clip_image_processor = CLIPImageProcessor()
-        from transformers import AutoProcessor, SiglipVisionModel
-        self.clip_image_processor = AutoProcessor.from_pretrained("google/siglip-so400m-patch14-384")
 
     def _get_t5_prompt_embeds(
         self,
@@ -904,10 +901,6 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
         layer_scale_input = layer_scale
         neg_layer_scale = torch.Tensor([0.0])
 
-        print(f'Pipeline')
-        print(f"ref_image_tensor.shape: {ref_image_tensor.shape}")
-        print(f"ref_latents.shape before packing: {ref_latents.shape}")
-        print(f"packed_ref_latents.shape: {packed_ref_latents.shape}")
 
         # 5. Prepare timesteps
         sigmas = np.linspace(1.0, 1 / num_inference_steps, num_inference_steps)

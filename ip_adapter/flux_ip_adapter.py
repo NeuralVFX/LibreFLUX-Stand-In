@@ -115,11 +115,3 @@ class LibreFluxStandInIPAdapter(nn.Module):
     def dtype(self):
         return next(self.parameters()).dtype
 
-### Examples
-# Test
-#image_proj_model = ImageProjModel(clip_dim=768, cross_attention_dim=3072, num_tokens=16)
-#emb =  torch.ones(2,768)
-#image_proj_model(emb)
-
-#image_proj_model = ImageProjModel(clip_dim=768, cross_attention_dim=3072, num_tokens=16)
-#IP_Adatper = LibreFluxIPAdapter(transformer,image_proj_model)

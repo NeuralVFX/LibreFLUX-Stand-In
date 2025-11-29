@@ -61,9 +61,6 @@ class IPFluxAttnProcessor2_0(nn.Module):
         self.scale = scale
         self.num_tokens = num_tokens
 
-        #self.to_k_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
-        #self.to_v_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
-
         self.q_lora = LoRALinearLayer(hidden_size, hidden_size, rank=128)
         self.k_lora = LoRALinearLayer(hidden_size, hidden_size, rank=128)
         self.v_lora = LoRALinearLayer(hidden_size, hidden_size, rank=128)
@@ -86,7 +83,6 @@ class IPFluxAttnProcessor2_0(nn.Module):
         ip_hidden_states = ip_encoder_hidden_states
         
         # `sample` projections.
-        #print ('attn processor ref_size:',ref_size)
         ###################################
         # Process latent and ref sep
         ###################################
@@ -127,7 +123,7 @@ class IPFluxAttnProcessor2_0(nn.Module):
           ref_query = ref_query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
           ref_key = ref_key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
           ref_value = ref_value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-          #######################
+        #######################
         # End ref shape
         ######################
 
@@ -144,8 +140,8 @@ class IPFluxAttnProcessor2_0(nn.Module):
         # Ref norm 
         ##########################
         if ref_size is not None and ref_size > 0: 
-            ref_query = attn.norm_q(ref_query) #### normalizing ref
-            ref_key = attn.norm_k(ref_key) #### normalizing ref
+            ref_query = attn.norm_q(ref_query) 
+            ref_key = attn.norm_k(ref_key) 
 
         # handle IP attention FIRST
         #####################################
@@ -179,7 +175,6 @@ class IPFluxAttnProcessor2_0(nn.Module):
                 batch_size, -1, attn.heads * head_dim
             )
         """
-        # the attention in FluxSingleTransformerBlock does not use `encoder_hidden_states`
 
         
         ##################
@@ -216,15 +211,6 @@ class IPFluxAttnProcessor2_0(nn.Module):
             key = torch.cat([encoder_hidden_states_key_proj, key], dim=2)
             value = torch.cat([encoder_hidden_states_value_proj, value], dim=2)
       
-      
-        #if encoder_hidden_states is not None:
-        #  print ('Double Block')
-        #else:
-        #  print ('Single Block')
-
-
-       # print ('image_rotary_emb shape: ',image_rotary_emb[0].shape[0])
-
 
         #######################
         # Prep Rotary Emb
@@ -234,8 +220,6 @@ class IPFluxAttnProcessor2_0(nn.Module):
             image_rotary_emb = (image_rotary_emb[0][:-ref_size], image_rotary_emb[1][:-ref_size])
             
 
-        #print(f"query shape: {query.shape}, image_rotary_emb[0] shape: {image_rotary_emb[0].shape}")
-        
         if image_rotary_emb is not None:
             from diffusers.models.embeddings import apply_rotary_emb
             query = apply_rotary_emb(query, image_rotary_emb)
@@ -267,7 +251,7 @@ class IPFluxAttnProcessor2_0(nn.Module):
         # Ref Query
         #######################################
 
-        # ref query doesnt need attention masking, casue no prompt
+        # ref query doesnt need attention masking, cause no prompt
         if ref_size is not None and ref_size > 0:
           ref_hidden_states = F.scaled_dot_product_attention(
               ref_query,
@@ -328,7 +312,7 @@ class IPFluxAttnProcessor2_0(nn.Module):
                         hidden_states[:, encoder_hidden_states.shape[1] :],
                     )
                 
-                    # Final injection of ip addapter hidden_states
+                    # Final injection of ip addapter hidden_states ( Removing for Stand-In)
                     #if ip_hidden_states != None:
                     #  hidden_states = hidden_states + (self.scale * layer_scale) * ip_hidden_states
 
@@ -348,7 +332,7 @@ class IPFluxAttnProcessor2_0(nn.Module):
 
         else:
             
-                    # Final injection of ip addapter hidden_states
+                    # Final injection of ip addapter hidden_states ( Removing for Stand-In)
                     #if ip_hidden_states != None:
                     #  hidden_states = hidden_states + (self.scale * layer_scale) * ip_hidden_states
 
