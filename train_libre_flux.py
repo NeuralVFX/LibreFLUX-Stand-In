@@ -6,6 +6,7 @@ import json
 import itertools
 import time
 import copy
+import math
 
 import matplotlib.pyplot as plt
 from matplotlib import patheffects as pe
@@ -31,7 +32,8 @@ from diffusers.training_utils import (
 )
 
                                                                                                                  
-import torch                                                                                                      
+import torch     
+import torch.optim.lr_scheduler as tls
 from torch.utils.data import Dataset                                                                              
 import os                                                                                                         
 import json                                                                                                       
@@ -262,6 +264,68 @@ def collate_fn(data):
         "drop_image_embeds": drop_image_embeds,
     }
 
+
+
+def build_cos(
+    optimizer,
+    warmup_num_steps: int,
+    cycle_first_step_size: int,
+    cycle_mult: int = 1,
+    floor_ratio: float = 0.1,
+    last_batch_iteration: int = -1,
+):
+    peak_lrs  = [g["lr"] for g in optimizer.param_groups]
+    floor_lrs = [lr * floor_ratio for lr in peak_lrs]
+
+    class CosineWithRestarts:  # no inheritance
+        def __init__(self):
+            self.opt       = optimizer
+            self.warmup    = warmup_num_steps
+            self.base_len  = cycle_first_step_size
+            self.mult      = max(1, cycle_mult)
+            self.peak_lrs  = peak_lrs
+            self.floor_lrs = floor_lrs
+            self.last_step = last_batch_iteration
+
+        def state_dict(self):
+            return {"last_step": self.last_step}
+
+        def load_state_dict(self, sd):
+            self.last_step = sd.get("last_step", -1)
+
+        def get_last_lr(self):
+            return [g["lr"] for g in self.opt.param_groups]
+
+        def step(self, step: int | None = None):
+            # 1) figure out the current global step
+            if step is None:
+                step = self.last_step + 1
+            self.last_step = step
+
+            # 2) compute lr for each param-group
+            if step < self.warmup:
+                k = step / max(1, self.warmup)
+                lrs = [f + (p - f) * k for p, f in zip(self.peak_lrs, self.floor_lrs)]
+            else:
+                step -= self.warmup
+                cycle_len = self.base_len
+                while step >= cycle_len:
+                    step -= cycle_len
+                    cycle_len *= self.mult
+                phase = 0.5 * (1 + math.cos(2 * math.pi * step / cycle_len))
+                lrs   = [f + (p - f) * phase for p, f in zip(self.peak_lrs, self.floor_lrs)]
+
+            # 3) apply to optimizer
+            for pg, lr in zip(self.opt.param_groups, lrs):
+                pg["lr"] = lr
+            return lrs
+
+    return CosineWithRestarts()
+
+def WarmupCosineRestartsLR(optimizer, **params):
+    return build_cos(optimizer, **params)
+
+tls.WarmupCosineRestartsLR = WarmupCosineRestartsLR
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
@@ -583,7 +647,17 @@ def main():
 
     # optimizer
     optimizer = torch.optim.AdamW(ip_adapter.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
-        
+  
+    # scheduler
+    scheduler = WarmupCosineRestartsLR(
+    optimizer,
+    warmup_num_steps=int(250),  # e.g. 5% of steps for warmup
+    cycle_first_step_size=int(args.val_steps),  # length of first cosine cycle
+    cycle_mult=1,          # keep cycles same length; tune if you like
+    floor_ratio=0.1,       # minimum lr = 10% of peak
+    last_batch_iteration=global_step,
+    )
+
     train_dataset = VFHQIpDataset(                                                                                  
         json_dir=args.data_root_path,                  
         face_size=args.ip_resolution,             
@@ -646,6 +720,7 @@ def main():
 
                 pixel_values = batch["images"]
                 ref_pixel_values = batch["face_images"]
+                current_lr = optimizer.param_groups[0]["lr"]
 
                 with torch.no_grad():
 
@@ -816,15 +891,25 @@ def main():
                 # Backpropagate
                 accelerator.backward(loss)
                 optimizer.step()
+                scheduler.step(global_step)
+
                 optimizer.zero_grad()
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean().item()
 
                 if accelerator.is_main_process:
                     if global_step % 10 == 0:
-
-                        print("Epoch {}, epoch_step {} global_step {}, data_time: {}, time: {}, step_loss: {}".format(
-                            epoch, step, global_step, load_data_time, time.perf_counter() - begin, avg_loss))
-            
+                        print(
+                            "Epoch {}, epoch_step {} global_step {}, data_time: {}, time: {}, "
+                            "step_loss: {}, lr: {:.6f}".format(
+                                epoch,
+                                step,
+                                global_step,
+                                load_data_time,
+                                time.perf_counter() - begin,
+                                avg_loss,
+                                current_lr,
+                            )
+                        )
             ###############################################
             # Validation and Saving ( not multi gpu compatible )
             ###############################################    
