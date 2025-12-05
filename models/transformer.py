@@ -743,9 +743,10 @@ class LibreFluxTransformer2DModel(
             # Stand in args
             ##########################
             if joint_attention_kwargs.get('ref_hidden_states') is not None:
+              null_pooled_projections = joint_attention_kwargs.get('null_pooled_projections', None)
 
               zero_timestep = torch.zeros_like(timestep)
-              zero_temb = self.time_text_embed(zero_timestep, pooled_projections)
+              zero_temb = self.time_text_embed(zero_timestep, null_pooled_projections)
           
               joint_attention_kwargs['ref_hidden_states'] = self.x_embedder(joint_attention_kwargs['ref_hidden_states'] )
               ref_img_ids = joint_attention_kwargs.get("ref_img_ids", None)

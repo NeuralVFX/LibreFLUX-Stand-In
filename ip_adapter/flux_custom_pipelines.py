@@ -833,6 +833,30 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
             max_sequence_length=max_sequence_length,
             lora_scale=lora_scale,
         )
+
+         ################
+        # Prepare empty text 
+        ################
+        (
+          null_prompt_embeds,
+          null_pooled_embeds,
+          null_text_ids,
+          null_prompt_mask,
+        ) = self.encode_prompt(
+            prompt="",
+            prompt_2="",
+            prompt_embeds=prompt_embeds,
+            pooled_prompt_embeds=pooled_prompt_embeds,
+            device=device,
+            num_images_per_prompt=num_images_per_prompt,
+            max_sequence_length=max_sequence_length,
+            lora_scale=lora_scale,
+        )
+        if not joint_attention_kwargs:
+          joint_attention_kwargs = {"null_pooled_projections": null_pooled_embeds} # <--- Pass here
+        else:
+          joint_attention_kwargs['null_pooled_projections'] = null_pooled_projections
+       
         if _prompt_mask is not None:
             prompt_mask = _prompt_mask
         assert prompt_mask is not None
@@ -1021,6 +1045,7 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
                     txt_ids=text_ids_input[0],
                     img_ids=latent_image_ids_input[0].to(device=self.transformer.device),
                     ref_img_ids=ref_img_ids[0],
+                    joint_attention_kwargs=joint_attention_kwargs,
                     return_dict=False,
                 )[0]
 
@@ -1045,6 +1070,7 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
                         txt_ids=text_ids_input[0],
                         img_ids=latent_image_ids_input[0].to(device=self.transformer.device),
                         ref_img_ids=ref_img_ids[0],
+                        joint_attention_kwargs=joint_attention_kwargs,
                         return_dict=False,
                     )[0]
 

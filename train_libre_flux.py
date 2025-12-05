@@ -738,7 +738,26 @@ def main():
                         max_sequence_length=args.max_sequence_length,
                         device=accelerator.device,
                     )
-                
+
+                    ################
+                    # Prepare empty text 
+                    ################
+                    (
+                    null_prompt_embeds,
+                    null_pooled_embeds,
+                    null_text_ids,
+                    null_prompt_mask,
+                    ) = encode_prompt_helper.encode_prompt_standalone(
+                        prompt="",
+                        tokenizer_one=tokenizer_one,
+                        text_encoder_one=text_encoder_one,
+                        tokenizer_two=tokenizer_two,
+                        text_encoder_two=text_encoder_two,
+                        max_sequence_length=args.max_sequence_length,
+                        device=accelerator.device,
+                    )
+                    joint_attention_kwargs = {"null_pooled_projections": null_pooled_embeds} # <--- Pass here
+
                     #################################
                     # Prepare Noisy Image
                     #################################   
@@ -848,6 +867,7 @@ def main():
                 timesteps = (timesteps / 1000.0)
                 text_ids = [ t for t in text_ids ]
 
+
                 model_pred = ip_adapter(
                     packed_ref_model_input,
                     packed_noisy_model_input, # Added stand in ref input
@@ -859,6 +879,7 @@ def main():
                     txt_ids=text_ids[0],
                     img_ids=latent_image_ids[0],
                     ref_img_ids=ref_image_ids[0], # Added stand in ref input
+                    joint_attention_kwargs = joint_attention_kwargs,
                     return_dict=False,
                 )[0]
 
