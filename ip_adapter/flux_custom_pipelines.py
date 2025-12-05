@@ -549,28 +549,45 @@ class LibreFluxIpAdapterPipeline(DiffusionPipeline, SD3LoraLoaderMixin):
         return latent_image_ids.to(dtype=dtype, device=device)
 
     @staticmethod
-    def _prepare_ref_latent_image_ids(batch_size, height, width,ref_width,ref_height, device, dtype):
+    def _prepare_ref_latent_image_ids(batch_size, height, width, ref_height, ref_width, device, dtype):
+        # 1. Create container (H/2 x W/2 x 3)
+        # 3 = [Time, Height, Width]
         ref_latent_image_ids = torch.zeros(ref_height // 2, ref_width // 2, 3)
+
+        # 2. SPATIAL SHIFT (CPM)
+        # We add 10000 (or your +height/+width) to ensure disjoint spatial coords.
+        # 10000 is safer to avoid any edge case overlaps.
         ref_latent_image_ids[..., 1] = (
-            ref_latent_image_ids[..., 1] + torch.arange(ref_height // 2)[:, None]+height
+            ref_latent_image_ids[..., 1] + torch.arange(ref_height // 2)[:, None] + 10000
         )
         ref_latent_image_ids[..., 2] = (
-            ref_latent_image_ids[..., 2] + torch.arange(ref_width // 2)[None, :]+width
+            ref_latent_image_ids[..., 2] + torch.arange(ref_width // 2)[None, :] + 10000
         )
 
+        # 3. TEMPORAL SHIFT (The Critical Fix)
+        # Set Index 0 to 1. Standard Flux uses 0. 
+        # This acts as the "Time" separator required by the paper.
+        ref_latent_image_ids[..., 0] = 1
+
+        # 4. BATCH EXPANSION (Keeping your consistency)
         ref_latent_image_id_height, ref_latent_image_id_width, ref_latent_image_id_channels = (
             ref_latent_image_ids.shape
         )
 
+        # Repeat for batch size
         ref_latent_image_ids = ref_latent_image_ids[None, :].repeat(batch_size, 1, 1, 1)
+
+        # Flatten the grid, keep batch and channel dims
+        # Shape: [Batch, Seq_Len, 3]
         ref_latent_image_ids = ref_latent_image_ids.reshape(
             batch_size,
             ref_latent_image_id_height * ref_latent_image_id_width,
             ref_latent_image_id_channels,
         )
         
-        return ref_latent_image_ids.to(dtype=dtype, device=device)  
+        return ref_latent_image_ids.to(dtype=dtype, device=device)
 
+        
     @staticmethod
     def _pack_latents(latents, batch_size, num_channels_latents, height, width):
         latents = latents.view(
