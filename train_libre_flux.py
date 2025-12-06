@@ -577,7 +577,7 @@ def main():
         ip_adapter = LibreFluxStandInIPAdapter(transformer,
                                         checkpoint=args.pretrained_ref_adapter_path)
         try:
-            global_step = int( args.pretrained_ip_adapter_path.split('-')[-1].split('.')[0])
+            global_step = int( args.pretrained_ref_adapter_path.split('-')[-1].split('.')[0])
             print (f'Resuming at Global Step: {global_step}')
 
         except:
@@ -956,3 +956,4 @@ def main():
                 
 if __name__ == "__main__":
     main()    
+
