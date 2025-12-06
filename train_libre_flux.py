@@ -915,7 +915,7 @@ def main():
 
                 # Backpropagate
                 accelerator.backward(loss)
-                    optimizer.step()
+                optimizer.step()
                 if args.cosine_lr:
                     scheduler.step(global_step)
 
@@ -961,5 +961,6 @@ def main():
                 
 if __name__ == "__main__":
     main()    
+
 
 
