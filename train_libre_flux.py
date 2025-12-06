@@ -481,7 +481,11 @@ def parse_args():
         action="store_true",
         help="Quantize everything except the adapter?",
     )
-
+    parser.add_argument(
+        "--cosine_lr",
+        action="store_true",
+        help="Cosine LR?",
+    )
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if env_local_rank != -1 and env_local_rank != args.local_rank:
@@ -911,8 +915,9 @@ def main():
 
                 # Backpropagate
                 accelerator.backward(loss)
-                optimizer.step()
-                scheduler.step(global_step)
+                    optimizer.step()
+                if args.cosine_lr:
+                    scheduler.step(global_step)
 
                 optimizer.zero_grad()
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean().item()
@@ -956,4 +961,5 @@ def main():
                 
 if __name__ == "__main__":
     main()    
+
 
